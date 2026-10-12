@@ -15,8 +15,6 @@ pip install softcloak
 
 That install is enough to replace strings and sign the APK. SoftCloak creates the signing key itself and writes a JAR v1 signature plus an APK v2 signature. A JDK and the Android SDK are not required.
 
-An existing key must be a PKCS12 file, passed with `--keystore` and `--storepass`. Java `.jks` files are not read. Export one from a JDK keystore with `keytool -importkeystore -srckeystore release.jks -destkeystore release.p12 -deststoretype PKCS12` before passing it to SoftCloak.
-
 If `softcloak` is not found after that, the scripts directory is not on `PATH`. Use `python -m softcloak` in the examples below.
 
 ## Command line
@@ -38,7 +36,6 @@ Both can be combined. Exact replacements run first, then substring tokens. The c
 ```bash
 python -m softcloak app.apk -o rebuilt.apk --dry-run --contains CompanyName
 python -m softcloak app.apk -o rebuilt.apk --exact "abcdef" "xy" --fit pad
-python -m softcloak app.apk -o rebuilt.apk --contains CompanyName --keystore release.p12 --storepass secret --alias mykey
 ```
 
 `--fit pad` fills a shorter exact replacement. `--fit clip` cuts a longer one and pads a shorter one. The default is to stop when the lengths differ.
@@ -47,7 +44,7 @@ python -m softcloak app.apk -o rebuilt.apk --contains CompanyName --keystore rel
 
 Image, audio, font, and native-library files are copied into the output unchanged. If a search string still occurs inside one of them, SoftCloak prints a warning and does not edit those bytes. A stored native library is repacked so its bytes start on a 16384-byte boundary, which covers 4 KB and 16 KB memory pages. Signature files are removed and replaced by the new signature. Other `META-INF` files are kept and edited.
 
-When `--keystore` is omitted, SoftCloak generates an RSA key and a self-signed certificate with subject `CN=SoftCloak`. The default alias is `repack`. To use your own key, pass a PKCS12 file with `--keystore`, `--storepass`, and `--alias`. The alias has to match the name stored in that file. PKCS12 uses the store password for the key as well, so `--keypass` is accepted and ignored. The zip writer uses the classic zip format, so an archive over 4 GB or with more than 65535 entries is out of scope.
+SoftCloak generates an RSA key and a self-signed certificate with subject `CN=SoftCloak`, then signs the APK with it. The default alias is `repack`. The zip writer uses the classic zip format, so an archive over 4 GB or with more than 65535 entries is out of scope.
 
 ## Python
 
@@ -81,7 +78,7 @@ result = rewrite_apk(
 
 `result.counts` maps each original string to `(utf8_matches, utf16_matches)`. `result.warnings` lists matches that were left unchanged. `result.output` is the signed APK, or `None` when `dry_run` is true.
 
-Other arguments match the command line: `seed`, `fit` (`"error"`, `"pad"`, or `"clip"`), `pad_char`, `allow_missing`, `keystore`, `storepass`, and `alias`. `keypass` is accepted and ignored.
+Other arguments match the command line: `seed`, `fit` (`"error"`, `"pad"`, or `"clip"`), `pad_char`, and `allow_missing`. Omit `keystore` and SoftCloak creates the key.
 
 ## Development
 
