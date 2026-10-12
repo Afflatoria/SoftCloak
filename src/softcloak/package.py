@@ -1,12 +1,8 @@
-"""Build an aligned APK and sign it with jarsigner."""
+"""Build an aligned APK zip."""
 
 from __future__ import annotations
 
-import os
-import shutil
 import struct
-import subprocess
-import tempfile
 import zipfile
 import zlib
 from pathlib import Path
@@ -29,34 +25,9 @@ def is_signature_entry(name: str) -> bool:
     )
 
 
-def find_java_tool(name: str) -> str:
-    found = shutil.which(name)
-    if found:
-        return found
-    java_home = os.environ.get("JAVA_HOME")
-    if java_home:
-        suffix = ".exe" if os.name == "nt" else ""
-        candidate = Path(java_home) / "bin" / f"{name}{suffix}"
-        if candidate.is_file():
-            return str(candidate)
-    raise RuntimeError(f"Could not find {name}. Install a JDK and put it on PATH.")
-
-
 def _deflate(data: bytes) -> bytes:
     compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
     return compressor.compress(data) + compressor.flush()
-
-
-def _version_numbers(name: str) -> tuple[int, ...]:
-    numbers = []
-    for piece in name.split("."):
-        digits = ""
-        for char in piece:
-            if not char.isdigit():
-                break
-            digits += char
-        numbers.append(int(digits) if digits else -1)
-    return tuple(numbers)
 
 
 def _entry_alignment(filename: str, method: int) -> int:
@@ -73,27 +44,6 @@ def _alignment_extra(offset: int, name_len: int, alignment: int) -> bytes:
     start = offset + 30 + name_len
     pad = (alignment - (start % alignment)) % alignment
     return b"\x00" * pad
-
-
-def find_apksigner_jar() -> str | None:
-    """Return the apksigner jar from APKSIGNER_JAR or an installed Android SDK."""
-    override = os.environ.get("APKSIGNER_JAR")
-    if override:
-        if Path(override).is_file():
-            return override
-        raise RuntimeError(f"APKSIGNER_JAR does not exist: {override}")
-    jars: list[Path] = []
-    for root_name in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
-        root = os.environ.get(root_name)
-        if not root:
-            continue
-        tools = Path(root) / "build-tools"
-        if tools.is_dir():
-            jars.extend(tools.glob("*/lib/apksigner.jar"))
-    if not jars:
-        return None
-    newest = max(jars, key=lambda path: _version_numbers(path.parent.parent.name))
-    return str(newest)
 
 
 def build_zip(entries: list[tuple[zipfile.ZipInfo, bytes]], dest: Path) -> None:
@@ -170,95 +120,6 @@ def build_zip(entries: list[tuple[zipfile.ZipInfo, bytes]], dest: Path) -> None:
     dest.write_bytes(blob)
 
 
-def _run(command: list[str]) -> None:
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"{command[0]} failed: {detail}")
-
-
-def manifest_min_sdk_unreadable(detail: str) -> bool:
-    """True when apksigner could not read minSdkVersion from the manifest."""
-    text = detail.lower()
-    return "minsdkversion" in text or "minimum supported" in text
-
-
-def _apksigner_sign(
-    java: str,
-    jar: str,
-    keystore: Path,
-    alias: str,
-    storepass: str,
-    keypass: str,
-    unsigned: Path,
-    dest: Path,
-    min_sdk: str | None,
-) -> None:
-    command = [
-        java,
-        "-jar",
-        jar,
-        "sign",
-        "--ks",
-        str(keystore),
-        "--ks-key-alias",
-        alias,
-        "--ks-pass",
-        f"pass:{storepass}",
-        "--key-pass",
-        f"pass:{keypass}",
-        "--v1-signing-enabled",
-        "true",
-        "--v2-signing-enabled",
-        "true",
-        "--v3-signing-enabled",
-        "true",
-        "--v4-signing-enabled",
-        "false",
-    ]
-    if min_sdk is not None:
-        command.extend(["--min-sdk-version", min_sdk])
-    command.extend(["--out", str(dest), str(unsigned)])
-    _run(command)
-    verify = [java, "-jar", jar, "verify"]
-    if min_sdk is not None:
-        verify.extend(["--min-sdk-version", min_sdk])
-    verify.append(str(dest))
-    _run(verify)
-
-
-def _sign_with_apksigner(
-    java: str,
-    jar: str,
-    keystore: Path,
-    alias: str,
-    storepass: str,
-    keypass: str,
-    unsigned: Path,
-    dest: Path,
-) -> list[str]:
-    warnings: list[str] = []
-    min_sdk = None
-    try:
-        _apksigner_sign(
-            java, jar, keystore, alias, storepass, keypass, unsigned, dest, None
-        )
-    except RuntimeError as exc:
-        if not manifest_min_sdk_unreadable(str(exc)):
-            raise
-        min_sdk = "1"
-        warnings.append(
-            "apksigner could not read minSdkVersion from AndroidManifest.xml. "
-            "Signed with --min-sdk-version 1."
-        )
-        _apksigner_sign(
-            java, jar, keystore, alias, storepass, keypass, unsigned, dest, min_sdk
-        )
-    if SIGNING_BLOCK_MAGIC not in dest.read_bytes():
-        raise RuntimeError("apksigner did not write a v2 signing block")
-    return warnings
-
-
 def sign_apk(
     unsigned: Path,
     dest: Path,
@@ -268,94 +129,14 @@ def sign_apk(
     keypass: str | None = None,
     alias: str = "repack",
 ) -> list[str]:
-    keytool = find_java_tool("keytool")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp = Path(temp_dir)
-        owned_keystore = keystore is None
-        if owned_keystore:
-            keystore = temp / "repack.keystore"
-            storepass = "android"
-            keypass = "android"
-            _run(
-                [
-                    keytool,
-                    "-genkeypair",
-                    "-keystore",
-                    str(keystore),
-                    "-storepass",
-                    storepass,
-                    "-keypass",
-                    keypass,
-                    "-alias",
-                    alias,
-                    "-keyalg",
-                    "RSA",
-                    "-keysize",
-                    "2048",
-                    "-validity",
-                    "10000",
-                    "-dname",
-                    "CN=SoftCloak, OU=Local, O=Local, C=US",
-                ]
-            )
-        if storepass is None:
-            raise RuntimeError("storepass is required when keystore is provided")
-        keypass = keypass or storepass
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        apksigner_jar = find_apksigner_jar()
-        if apksigner_jar:
-            java = find_java_tool("java")
-            warnings = _sign_with_apksigner(
-                java,
-                apksigner_jar,
-                keystore,
-                alias,
-                storepass,
-                keypass,
-                unsigned,
-                dest,
-            )
-            return warnings
-        jarsigner = find_java_tool("jarsigner")
-        signed = temp / "signed.apk"
-        _run(
-            [
-                jarsigner,
-                "-sigalg",
-                "SHA256withRSA",
-                "-digestalg",
-                "SHA-256",
-                "-keystore",
-                str(keystore),
-                "-storepass",
-                storepass,
-                "-keypass",
-                keypass,
-                "-signedjar",
-                str(signed),
-                str(unsigned),
-                alias,
-            ]
-        )
-        with zipfile.ZipFile(signed) as archive:
-            entries = [
-                (info, archive.read(info.filename)) for info in archive.infolist()
-            ]
-        build_zip(entries, dest)
-        result = subprocess.run(
-            [jarsigner, "-verify", str(dest)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(f"signed APK failed verification: {detail}")
-        return [
-            (
-                "JAR v1 signature only. apksigner was not found, so v2 and v3 "
-                "signatures were not added. An app with targetSdk 30 or higher "
-                "will not install on Android 11 or later. Set ANDROID_HOME to an "
-                "SDK that includes build-tools."
-            )
-        ]
+    """Sign an APK in-process. Imported lazily so zip building does not load crypto."""
+    from softcloak.signing import sign_apk as sign_in_process
+
+    return sign_in_process(
+        unsigned,
+        dest,
+        keystore=keystore,
+        storepass=storepass,
+        keypass=keypass,
+        alias=alias,
+    )

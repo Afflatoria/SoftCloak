@@ -3,19 +3,19 @@
 The goal of this repository is to try and make reverse engineering more difficult. Currently only
 focused on APK files but will eventually move on to IPA files, binaries, firmware, and other software.
 
-SoftCloak replaces text inside an APK, then signs the rebuilt package. Substring matches are swapped for one generated token of the same length. Exact matches are swapped for text you choose. The APK is signed with a new jar signature.
+SoftCloak replaces text inside an APK, then signs the rebuilt package. Substring matches are swapped for one generated token of the same length. Exact matches are swapped for text you choose. The APK is signed with a new JAR v1 signature and an APK v2 signature.
 
 Same-length replacements keep the DEX, manifest, and resource table aligned, so the file can still be installed.
 
 ## Install
 
-A JDK is required. `keytool` and `jarsigner` must be on `PATH`.
-
-Android SDK build-tools are optional. When `ANDROID_HOME` or `ANDROID_SDK_ROOT` points at an SDK, SoftCloak signs with `apksigner` and writes v1, v2, and v3 signatures. If `apksigner` cannot read `minSdkVersion` from the manifest, the APK is signed with `--min-sdk-version 1`. Without build-tools, SoftCloak signs with `jarsigner` and prints a warning: the result is a JAR v1 signature, and an app with `targetSdk` 30 or higher will not install on Android 11 or later.
-
 ```bash
 pip install softcloak
 ```
+
+That install is enough to replace strings and sign the APK. SoftCloak creates the signing key itself and writes a JAR v1 signature plus an APK v2 signature. A JDK and the Android SDK are not required.
+
+An existing key must be a PKCS12 file, passed with `--keystore` and `--storepass`. Java `.jks` files are not read.
 
 If `softcloak` is not found after that, the scripts directory is not on `PATH`. Use `python -m softcloak` in the examples below.
 
@@ -45,7 +45,7 @@ python -m softcloak app.apk -o rebuilt.apk --contains CompanyName --keystore my.
 
 `--contains` replaces that text wherever it sits inside a longer string, in every file, in both UTF-8 and UTF-16. A dotted name also rewrites the DEX form with slashes, so `com.example` changes `Lcom/example/...` as well. An exact replacement does the same, and keeps the separator you would expect: `com.example` to `org.example` also rewrites `com/example` to `org/example`. Matching is case-sensitive. Pass `AppName` and `appname` separately. Patterns shorter than 4 characters are allowed, but they can hit unrelated bytes, and SoftCloak prints a warning.
 
-Image, audio, font, and native-library bytes are left unchanged. A stored native library is repacked so its bytes start on a 16384-byte boundary, which covers 4 KB and 16 KB memory pages. Signature files are removed and replaced by the new signature. Other `META-INF` files are kept and edited. The generated certificate subject is `CN=SoftCloak` and the default alias is `repack`. Pass `--keystore` and `--alias` to use your own. The zip writer uses the classic zip format, so an archive over 4 GB or with more than 65535 entries is out of scope.
+Image, audio, font, and native-library bytes are left unchanged. A stored native library is repacked so its bytes start on a 16384-byte boundary, which covers 4 KB and 16 KB memory pages. Signature files are removed and replaced by the new signature. Other `META-INF` files are kept and edited. The generated certificate subject is `CN=SoftCloak` and the default alias is `repack`. Pass `--keystore` and `--alias` to use your own PKCS12 key. The zip writer uses the classic zip format, so an archive over 4 GB or with more than 65535 entries is out of scope.
 
 ## Python
 
@@ -101,4 +101,4 @@ The app can crash or fail a lookup when a replacement has to match something tha
 - Resource paths, such as `res/layout/...`, must match the file names in the APK. SoftCloak does not rename those files.
 - Native libraries are left unchanged. If code now looks up a new name and the library still has the old one, that call fails.
 - Intent actions, content-provider authorities, and server URLs fail when only one side of the match is replaced.
-- A JAR v1 signature alone fails install for an app whose `targetSdk` is 30 or higher. Point `ANDROID_HOME` at Android SDK build-tools so the rebuilt APK gets a v2 signature.
+- The rebuilt APK is signed with a new certificate. Android will not install it over a copy signed by the previous certificate. Uninstall the old copy first.

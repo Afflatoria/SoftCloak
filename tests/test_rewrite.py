@@ -1,5 +1,4 @@
 import hashlib
-import os
 import struct
 import tempfile
 import unittest
@@ -7,12 +6,7 @@ import zipfile
 import zlib
 from pathlib import Path
 
-from softcloak.package import (
-    PAGE_ALIGNMENT,
-    build_zip,
-    find_apksigner_jar,
-    manifest_min_sdk_unreadable,
-)
+from softcloak.package import PAGE_ALIGNMENT, build_zip
 from softcloak.rewrite import (
     apply_rules,
     build_rules,
@@ -136,9 +130,11 @@ class ApkTests(unittest.TestCase):
                 blob = b"".join(
                     archive.read(name)
                     for name in archive.namelist()
-                    if not name.startswith("META-INF/")
+                    if not name.startswith("META-INF/") and name != "res/icon.png"
                 )
                 self.assertIn("META-INF/services/demo", names)
+                self.assertIn("res/icon.png", names)
+                self.assertEqual(archive.read("res/icon.png"), b"\x89PNG uncrackable1")
                 self.assertNotIn(b"uncrackable1", blob)
                 self.assertNotIn(b"vantagepoint", blob)
                 self.assertNotIn("owasp".encode("utf-16le"), blob)
@@ -152,8 +148,8 @@ class ApkTests(unittest.TestCase):
                     b"uncrackable1", archive.read("META-INF/services/demo")
                 )
             signed = dest.read_bytes()
-            if b"APK Sig Block 42" not in signed:
-                self.assertTrue(any("v1" in warning for warning in result.warnings))
+            self.assertIn(b"APK Sig Block 42", signed)
+            self.assertTrue(any(name == "META-INF/REPACK.SF" for name in names))
 
 
 class PublicApiTests(unittest.TestCase):
@@ -272,36 +268,62 @@ class PackageLayoutTests(unittest.TestCase):
                 0,
             )
 
-    def test_unreadable_manifest_is_detected_from_apksigner_output(self):
-        detail = (
-            "MinSdkVersionException: Failed to determine APK's minimum "
-            "supported platform version"
-        )
-        self.assertTrue(manifest_min_sdk_unreadable(detail))
-        self.assertFalse(manifest_min_sdk_unreadable("keystore password was incorrect"))
 
-    def test_finds_the_highest_build_tools_jar(self):
-        keys = ("APKSIGNER_JAR", "ANDROID_HOME", "ANDROID_SDK_ROOT")
-        saved = {key: os.environ.get(key) for key in keys}
-        try:
-            os.environ.pop("APKSIGNER_JAR", None)
-            os.environ.pop("ANDROID_SDK_ROOT", None)
-            with tempfile.TemporaryDirectory() as temp_dir:
-                root = Path(temp_dir)
-                for version in ("33.0.1", "34.0.0"):
-                    jar = root / "build-tools" / version / "lib" / "apksigner.jar"
-                    jar.parent.mkdir(parents=True)
-                    jar.write_bytes(b"not a real jar")
-                os.environ["ANDROID_HOME"] = str(root)
-                found = find_apksigner_jar()
-            self.assertIsNotNone(found)
-            self.assertIn("34.0.0", found or "")
-        finally:
-            for key, value in saved.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+class SigningTests(unittest.TestCase):
+    def test_pkcs12_keystore_signs_and_tamper_fails(self):
+        from cryptography.hazmat.primitives.serialization import (
+            BestAvailableEncryption,
+            Encoding,
+            pkcs12,
+        )
+
+        from softcloak.signing import (
+            generate_signing_identity,
+            load_signing_identity,
+            sign_apk,
+            verify_apk,
+        )
+
+        key, certificate = generate_signing_identity()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = root / "keys.p12"
+            store.write_bytes(
+                pkcs12.serialize_key_and_certificates(
+                    b"mykey",
+                    key,
+                    certificate,
+                    None,
+                    BestAvailableEncryption(b"secret"),
+                )
+            )
+            loaded_key, loaded_cert = load_signing_identity(store, "secret", "mykey")
+            self.assertEqual(
+                loaded_key.private_numbers(),
+                key.private_numbers(),
+            )
+            self.assertEqual(
+                loaded_cert.public_bytes(Encoding.DER),
+                certificate.public_bytes(Encoding.DER),
+            )
+            with self.assertRaises(ValueError):
+                load_signing_identity(store, "secret", "other")
+
+            source = root / "in.apk"
+            dest = root / "out.apk"
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr("classes.dex", b"dex\n035\x00" + b"\x00" * 40)
+            sign_apk(source, dest, keystore=store, storepass="secret", alias="mykey")
+            signed = dest.read_bytes()
+            verify_apk(signed)
+            with zipfile.ZipFile(dest) as archive:
+                self.assertIn("META-INF/MYKEY.SF", archive.namelist())
+                signature_file = archive.read("META-INF/MYKEY.SF")
+                self.assertIn(b"X-Android-APK-Signed: 2", signature_file)
+            tampered = bytearray(signed)
+            tampered[4] ^= 0x01
+            with self.assertRaises(RuntimeError):
+                verify_apk(bytes(tampered))
 
 
 def _payload_offset(blob: bytes, name: str) -> int:

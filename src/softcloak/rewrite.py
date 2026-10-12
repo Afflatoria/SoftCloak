@@ -353,7 +353,12 @@ def rewrite_apk(
 
     totals = {rule.old: [0, 0] for rule in rules}
     rewritten: list[tuple[zipfile.ZipInfo, bytes]] = []
-    for info, data in searchable:
+    for info, data in stored:
+        if is_signature_entry(info.filename):
+            continue
+        if _skipped(info.filename):
+            rewritten.append((info, data))
+            continue
         updated, counts = apply_rules(data, rules)
         for key, (utf8_count, utf16_count) in counts.items():
             totals[key][0] += utf8_count
