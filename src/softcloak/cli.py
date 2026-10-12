@@ -72,8 +72,13 @@ def _parser() -> argparse.ArgumentParser:
 def _print_result(result) -> None:
     for rule in result.rules:
         utf8_count, utf16_count = result.counts.get(rule.old, (0, 0))
-        extras = [form for form in rule.forms if form != rule.old]
-        suffix = f" also {extras!r}" if extras else ""
+        replacements = rule.replacements or tuple(rule.new for _form in rule.forms)
+        extras = [
+            f"{form!r} -> {replacement!r}"
+            for form, replacement in zip(rule.forms, replacements, strict=True)
+            if form != rule.old
+        ]
+        suffix = f" also {', '.join(extras)}" if extras else ""
         print(
             f"{rule.kind} {rule.old!r} -> {rule.new!r}{suffix} "
             f"(utf8={utf8_count}, utf16={utf16_count})"
@@ -89,12 +94,6 @@ def _print_result(result) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    for text in args.contains:
-        if len(text) < 4:
-            print(
-                f"warning: {text!r} is very short and can match unrelated bytes",
-                file=sys.stderr,
-            )
     try:
         result = rewrite_apk(
             args.apk,

@@ -34,6 +34,7 @@ class Rule:
     old: str
     new: str
     forms: tuple[str, ...] = ()
+    replacements: tuple[str, ...] = ()
 
 
 @dataclass
@@ -105,19 +106,25 @@ def _replace_span(data: bytes, old: bytes, new: bytes) -> tuple[bytes, int]:
     return data, count
 
 
+def _replacements(rule: Rule) -> tuple[str, ...]:
+    if rule.replacements:
+        return rule.replacements
+    return tuple(rule.new for _form in rule.forms)
+
+
 def apply_rules(
     data: bytes, rules: list[Rule]
 ) -> tuple[bytes, dict[str, tuple[int, int]]]:
     counts = {rule.old: [0, 0] for rule in rules}
     for rule in rules:
-        for form in rule.forms:
+        for form, replacement in zip(rule.forms, _replacements(rule), strict=True):
             data, utf8_count = _replace_span(
-                data, form.encode("utf-8"), rule.new.encode("utf-8")
+                data, form.encode("utf-8"), replacement.encode("utf-8")
             )
             data, utf16_count = _replace_span(
                 data,
                 form.encode("utf-16le"),
-                rule.new.encode("utf-16le"),
+                replacement.encode("utf-16le"),
             )
             counts[rule.old][0] += utf8_count
             counts[rule.old][1] += utf16_count
@@ -127,6 +134,43 @@ def apply_rules(
 def separator_forms(text: str) -> tuple[str, ...]:
     """Android class names use '/' in DEX and '.' everywhere else."""
     return tuple(dict.fromkeys((text, text.replace(".", "/"), text.replace("/", "."))))
+
+
+def separator_pairs(old: str, new: str) -> tuple[tuple[str, str], ...]:
+    """Pair each separator spelling of ``old`` with the same spelling of ``new``."""
+    candidates = (
+        (old, new),
+        (old.replace(".", "/"), new.replace(".", "/")),
+        (old.replace("/", "."), new.replace("/", ".")),
+    )
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for left, right in candidates:
+        if left in seen:
+            continue
+        seen.add(left)
+        pairs.append((left, right))
+    return tuple(pairs)
+
+
+def avoid_token_collisions(rules: list[Rule], blobs: list[bytes], seed: str) -> None:
+    """Pick another token when a generated replacement is already in the APK."""
+    blocked = [item for rule in rules for item in (rule.old, rule.new)]
+    for rule in rules:
+        if rule.kind != "contains":
+            continue
+        extra: list[str] = []
+        for _attempt in range(50):
+            utf8 = rule.new.encode("utf-8")
+            utf16 = rule.new.encode("utf-16le")
+            if all(utf8 not in blob and utf16 not in blob for blob in blobs):
+                blocked.append(rule.new)
+                break
+            extra.append(rule.new)
+            rule.new = obfuscated_token(rule.old, blocked + extra, seed)
+            rule.replacements = tuple(rule.new for _form in rule.forms)
+        else:
+            raise RuntimeError(f"could not find an unused replacement for {rule.old!r}")
 
 
 def present_in(data: bytes, text: str) -> bool:
@@ -186,28 +230,53 @@ def build_rules(
             raise ValueError(f"repeated --exact search string: {old!r}")
         used_exact.add(old)
         fitted = _fit(old, new, fit, pad_char)
+        pairs = separator_pairs(old, fitted)
         for text in contains:
-            if text in fitted:
+            if any(text in replacement for _form, replacement in pairs):
                 raise ValueError(
                     f"exact replacement {fitted!r} still contains --contains value {text!r}. "
                     "A later substring pass would change it."
                 )
-        exact_rules.append(Rule("exact", old, fitted, (old,)))
+        exact_rules.append(
+            Rule(
+                "exact",
+                old,
+                fitted,
+                tuple(form for form, _replacement in pairs),
+                tuple(replacement for _form, replacement in pairs),
+            )
+        )
+
+    exact_forms = {form for rule in exact_rules for form in rule.forms}
+    for text in contains:
+        if text in exact_forms:
+            raise ValueError(
+                f"{text!r} is both a --contains value and an --exact search string"
+            )
+    for rule in exact_rules:
+        for other in exact_rules:
+            if other.old == rule.old:
+                continue
+            for replacement in rule.replacements:
+                for form in other.forms:
+                    if form in replacement:
+                        raise ValueError(
+                            f"exact replacement {replacement!r} contains exact search {form!r}. "
+                            "A later pass would change it."
+                        )
 
     blocked = (
         contains
         + [rule.old for rule in exact_rules]
         + [rule.new for rule in exact_rules]
     )
-    contain_rules = [
-        Rule(
-            "contains",
-            text,
-            obfuscated_token(text, blocked, seed),
-            separator_forms(text),
+    contain_rules = []
+    for text in sorted(contains, key=len, reverse=True):
+        token = obfuscated_token(text, blocked, seed)
+        forms = separator_forms(text)
+        contain_rules.append(
+            Rule("contains", text, token, forms, tuple(token for _form in forms))
         )
-        for text in sorted(contains, key=len, reverse=True)
-    ]
     exact_rules.sort(key=lambda rule: len(rule.old), reverse=True)
     return exact_rules + contain_rules
 
@@ -247,7 +316,16 @@ def rewrite_apk(
     with zipfile.ZipFile(source_path) as archive:
         stored = [(info, archive.read(info.filename)) for info in archive.infolist()]
 
+    avoid_token_collisions(
+        rules,
+        [data for info, data in stored if not is_signature_entry(info.filename)],
+        seed,
+    )
+
     warnings: list[str] = []
+    for rule in rules:
+        if len(rule.old) < 4:
+            warnings.append(f"{rule.old!r} is very short and can match unrelated bytes")
     missing: list[str] = []
     searchable = []
     for info, data in stored:
@@ -296,13 +374,15 @@ def rewrite_apk(
     with tempfile.TemporaryDirectory() as temp_dir:
         unsigned = Path(temp_dir) / "unsigned.apk"
         build_zip(rewritten, unsigned)
-        sign_apk(
-            unsigned,
-            output,
-            keystore=Path(keystore) if keystore else None,
-            storepass=storepass,
-            keypass=keypass,
-            alias=alias,
+        warnings.extend(
+            sign_apk(
+                unsigned,
+                output,
+                keystore=Path(keystore) if keystore else None,
+                storepass=storepass,
+                keypass=keypass,
+                alias=alias,
+            )
         )
     if same_target:
         os.replace(output, dest_path)

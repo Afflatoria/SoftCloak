@@ -1,4 +1,5 @@
 import hashlib
+import os
 import struct
 import tempfile
 import unittest
@@ -6,6 +7,7 @@ import zipfile
 import zlib
 from pathlib import Path
 
+from softcloak.package import PAGE_ALIGNMENT, build_zip, find_apksigner_jar
 from softcloak.rewrite import (
     apply_rules,
     build_rules,
@@ -144,6 +146,9 @@ class ApkTests(unittest.TestCase):
                 self.assertNotIn(
                     b"uncrackable1", archive.read("META-INF/services/demo")
                 )
+            signed = dest.read_bytes()
+            if b"APK Sig Block 42" not in signed:
+                self.assertTrue(any("v1" in warning for warning in result.warnings))
 
 
 class PublicApiTests(unittest.TestCase):
@@ -167,6 +172,138 @@ class PublicApiTests(unittest.TestCase):
             self.assertEqual(result.rules[0].old, "com.example")
             self.assertEqual(len(result.rules[0].new), len("com.example"))
             self.assertGreater(result.counts["com.example"][0], 0)
+
+    def test_short_pattern_warns_from_the_library(self):
+        from softcloak import rewrite_apk
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "sample.apk"
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr("classes.txt", b"ab-rest")
+            result = rewrite_apk(
+                source,
+                root / "out.apk",
+                contains=["ab"],
+                dry_run=True,
+            )
+        self.assertTrue(any("very short" in warning for warning in result.warnings))
+
+    def test_generated_token_skips_text_already_present(self):
+        from softcloak import rewrite_apk
+
+        existing = obfuscated_token("abcd", ["abcd"], "softcloak")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "sample.apk"
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr("classes.txt", existing.encode() + b" abcd")
+            result = rewrite_apk(
+                source,
+                root / "out.apk",
+                contains=["abcd"],
+                dry_run=True,
+            )
+        self.assertNotEqual(result.rules[0].new, existing)
+        self.assertEqual(len(result.rules[0].new), 4)
+
+
+class ExactSeparatorTests(unittest.TestCase):
+    def test_exact_dotted_name_rewrites_the_dex_slash_form(self):
+        rules = build_rules(
+            None,
+            [("com.example", "org.example")],
+            seed="seed",
+            fit="error",
+            pad_char=" ",
+        )
+        updated, counts = apply_rules(b"Lcom/example/Main; com.example", rules)
+        self.assertIn(b"Lorg/example/Main;", updated)
+        self.assertIn(b"org.example", updated)
+        self.assertNotIn(b"com/example", updated)
+        self.assertNotIn(b"com.example", updated)
+        self.assertEqual(counts["com.example"], (2, 0))
+
+    def test_exact_replacement_that_matches_a_later_rule_is_rejected(self):
+        with self.assertRaises(ValueError):
+            build_rules(
+                None,
+                [("aa", "bb"), ("bb", "cc")],
+                seed="seed",
+                fit="error",
+                pad_char=" ",
+            )
+
+    def test_same_string_cannot_be_contains_and_exact(self):
+        with self.assertRaises(ValueError):
+            build_rules(
+                ["name"],
+                [("name", "xxxx")],
+                seed="seed",
+                fit="error",
+                pad_char=" ",
+            )
+
+
+class PackageLayoutTests(unittest.TestCase):
+    def test_stored_native_library_is_page_aligned(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dest = Path(temp_dir) / "sample.zip"
+            entries = []
+            for name, payload in (
+                ("pad.bin", b"x"),
+                ("resources.arsc", b"resource-table"),
+                ("lib/arm64-v8a/libdemo.so", b"native-code"),
+            ):
+                info = zipfile.ZipInfo(name)
+                info.compress_type = zipfile.ZIP_STORED
+                info.date_time = (2026, 10, 12, 0, 0, 0)
+                entries.append((info, payload))
+            build_zip(entries, dest)
+            blob = dest.read_bytes()
+            self.assertEqual(_payload_offset(blob, "resources.arsc") % 4, 0)
+            self.assertEqual(
+                _payload_offset(blob, "lib/arm64-v8a/libdemo.so") % PAGE_ALIGNMENT,
+                0,
+            )
+
+    def test_finds_the_highest_build_tools_jar(self):
+        keys = ("APKSIGNER_JAR", "ANDROID_HOME", "ANDROID_SDK_ROOT")
+        saved = {key: os.environ.get(key) for key in keys}
+        try:
+            os.environ.pop("APKSIGNER_JAR", None)
+            os.environ.pop("ANDROID_SDK_ROOT", None)
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                for version in ("33.0.1", "34.0.0"):
+                    jar = root / "build-tools" / version / "lib" / "apksigner.jar"
+                    jar.parent.mkdir(parents=True)
+                    jar.write_bytes(b"not a real jar")
+                os.environ["ANDROID_HOME"] = str(root)
+                found = find_apksigner_jar()
+            self.assertIsNotNone(found)
+            self.assertIn("34.0.0", found or "")
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def _payload_offset(blob: bytes, name: str) -> int:
+    encoded = name.encode()
+    offset = 0
+    while offset < len(blob):
+        found = blob.find(b"PK\x03\x04", offset)
+        if found < 0:
+            break
+        name_len, extra_len = struct.unpack_from("<HH", blob, found + 26)
+        start = found + 30
+        if blob[start : start + name_len] == encoded:
+            return start + name_len + extra_len
+        offset = found + 4
+    raise AssertionError(f"{name} is not in the zip")
 
 
 if __name__ == "__main__":

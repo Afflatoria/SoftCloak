@@ -11,6 +11,8 @@ Same-length replacements keep the DEX, manifest, and resource table aligned, so 
 
 A JDK is required. `keytool` and `jarsigner` must be on `PATH`.
 
+Android SDK build-tools are optional. When `ANDROID_HOME` or `ANDROID_SDK_ROOT` points at an SDK, SoftCloak signs with `apksigner` and writes v1, v2, and v3 signatures. Without that, it signs with `jarsigner` and prints a warning: the result is a JAR v1 signature, and an app with `targetSdk` 30 or higher will not install on Android 11 or later.
+
 ```bash
 pip install softcloak
 ```
@@ -41,9 +43,9 @@ python -m softcloak app.apk -o rebuilt.apk --contains CompanyName --keystore my.
 
 `--fit pad` fills a shorter exact replacement. `--fit clip` cuts a longer one and pads a shorter one. The default is to stop when the lengths differ.
 
-`--contains` replaces that text wherever it sits inside a longer string, in every file, in both UTF-8 and UTF-16. A dotted name also rewrites the DEX form with slashes, so `com.example` changes `Lcom/example/...` as well. Matching is case-sensitive. Pass `AppName` and `appname` separately. Patterns shorter than 4 characters are allowed, but they can hit unrelated bytes.
+`--contains` replaces that text wherever it sits inside a longer string, in every file, in both UTF-8 and UTF-16. A dotted name also rewrites the DEX form with slashes, so `com.example` changes `Lcom/example/...` as well. An exact replacement does the same, and keeps the separator you would expect: `com.example` to `org.example` also rewrites `com/example` to `org/example`. Matching is case-sensitive. Pass `AppName` and `appname` separately. Patterns shorter than 4 characters are allowed, but they can hit unrelated bytes, and SoftCloak prints a warning.
 
-Image, audio, font, and native-library entries are left unchanged. Signature files are removed and replaced by the new signature. Other `META-INF` files are kept and edited.
+Image, audio, font, and native-library bytes are left unchanged. A stored native library is repacked so its bytes start on a 16384-byte boundary, which covers 4 KB and 16 KB memory pages. Signature files are removed and replaced by the new signature. Other `META-INF` files are kept and edited. The generated certificate subject is `CN=SoftCloak` and the default alias is `repack`. Pass `--keystore` and `--alias` to use your own. The zip writer uses the classic zip format, so an archive over 4 GB or with more than 65535 entries is out of scope.
 
 ## Python
 
@@ -99,3 +101,4 @@ The app can crash or fail a lookup when a replacement has to match something tha
 - Resource paths, such as `res/layout/...`, must match the file names in the APK. SoftCloak does not rename those files.
 - Native libraries are left unchanged. If code now looks up a new name and the library still has the old one, that call fails.
 - Intent actions, content-provider authorities, and server URLs fail when only one side of the match is replaced.
+- A JAR v1 signature alone fails install for an app whose `targetSdk` is 30 or higher. Point `ANDROID_HOME` at Android SDK build-tools so the rebuilt APK gets a v2 signature.
