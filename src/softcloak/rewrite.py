@@ -228,6 +228,16 @@ def rewrite_apk(
     keypass: str | None = None,
     alias: str = "repack",
 ) -> RewriteResult:
+    """Replace text in an APK and re-sign it.
+
+    ``contains`` replaces each substring with one generated token of the same
+    length. ``exact`` is a list of ``(old, new)`` pairs. ``new`` must be the
+    same length as ``old`` unless ``fit`` is ``"pad"`` or ``"clip"``.
+
+    The returned :class:`RewriteResult` lists each replacement on ``rules``
+    and how many UTF-8 and UTF-16 matches changed in ``counts``. ``output``
+    is the signed APK, or ``None`` when ``dry_run`` is true.
+    """
     source_path = Path(source)
     dest_path = Path(dest)
     if not source_path.is_file():

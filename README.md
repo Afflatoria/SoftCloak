@@ -11,34 +11,32 @@ Same-length replacements keep the DEX, manifest, and resource table aligned, so 
 
 A JDK is required. `keytool` and `jarsigner` must be on `PATH`.
 
-From the project directory:
-
 ```bash
-pip install -e ".[dev]"
+pip install softcloak
 ```
 
-The `dev` extra installs Ruff. The test suite runs `ruff check` and `ruff format --check`.
+If `softcloak` is not found after that, the scripts directory is not on `PATH`. Use `python -m softcloak` in the examples below.
 
-## Use
+## Command line
 
 Generate a token for every occurrence of a substring:
 
 ```bash
-softcloak app.apk -o rebuilt.apk --contains com.example --contains CompanyName
+python -m softcloak app.apk -o rebuilt.apk --contains com.example --contains CompanyName
 ```
 
 Replace one exact string with your own text. The new text has to be the same length:
 
 ```bash
-softcloak app.apk -o rebuilt.apk --exact "Old full sentence" "New full sentence"
+python -m softcloak app.apk -o rebuilt.apk --exact "Old full sentence" "New full sentence"
 ```
 
 Both can be combined. Exact replacements run first, then substring tokens. The command prints each mapping and checks the signature before it finishes.
 
 ```bash
-softcloak app.apk -o rebuilt.apk --dry-run --contains CompanyName
-softcloak app.apk -o rebuilt.apk --exact "abcdef" "xy" --fit pad
-softcloak app.apk -o rebuilt.apk --contains CompanyName --keystore my.keystore --storepass secret --alias mykey
+python -m softcloak app.apk -o rebuilt.apk --dry-run --contains CompanyName
+python -m softcloak app.apk -o rebuilt.apk --exact "abcdef" "xy" --fit pad
+python -m softcloak app.apk -o rebuilt.apk --contains CompanyName --keystore my.keystore --storepass secret --alias mykey
 ```
 
 `--fit pad` fills a shorter exact replacement. `--fit clip` cuts a longer one and pads a shorter one. The default is to stop when the lengths differ.
@@ -46,6 +44,50 @@ softcloak app.apk -o rebuilt.apk --contains CompanyName --keystore my.keystore -
 `--contains` replaces that text wherever it sits inside a longer string, in every file, in both UTF-8 and UTF-16. A dotted name also rewrites the DEX form with slashes, so `com.example` changes `Lcom/example/...` as well. Matching is case-sensitive. Pass `AppName` and `appname` separately. Patterns shorter than 4 characters are allowed, but they can hit unrelated bytes.
 
 Image, audio, font, and native-library entries are left unchanged. Signature files are removed and replaced by the new signature. Other `META-INF` files are kept and edited.
+
+## Python
+
+Skip the command line and call the same operation from a script:
+
+```python
+from softcloak import rewrite_apk
+
+result = rewrite_apk(
+    "app.apk",
+    "rebuilt.apk",
+    contains=["com.example", "CompanyName"],
+    exact=[("Old full sentence", "New full sentence")],
+)
+for rule in result.rules:
+    utf8_count, utf16_count = result.counts[rule.old]
+    print(f"{rule.old} -> {rule.new}  utf8={utf8_count} utf16={utf16_count}")
+print(result.output)
+```
+
+Preview the mapping without writing a file:
+
+```python
+result = rewrite_apk(
+    "app.apk",
+    "rebuilt.apk",
+    contains=["CompanyName"],
+    dry_run=True,
+)
+```
+
+`result.counts` maps each original string to `(utf8_matches, utf16_matches)`. `result.warnings` lists matches that were left unchanged. `result.output` is the signed APK, or `None` when `dry_run` is true.
+
+Other arguments match the command line: `seed`, `fit` (`"error"`, `"pad"`, or `"clip"`), `pad_char`, `allow_missing`, `keystore`, `storepass`, `keypass`, and `alias`.
+
+## Development
+
+From a checkout of this repository:
+
+```bash
+pip install -e ".[dev]"
+```
+
+The `dev` extra installs Ruff. The test suite runs `ruff check` and `ruff format --check`.
 
 ## What can break the app
 

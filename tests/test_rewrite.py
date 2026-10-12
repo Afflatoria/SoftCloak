@@ -146,5 +146,28 @@ class ApkTests(unittest.TestCase):
                 )
 
 
+class PublicApiTests(unittest.TestCase):
+    def test_import_can_plan_a_rewrite(self):
+        from softcloak import rewrite_apk
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "sample.apk"
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr(
+                    "classes.dex", b"dex\n035\x00" + b"\x00" * 32 + b"com.example"
+                )
+            result = rewrite_apk(
+                source,
+                root / "out.apk",
+                contains=["com.example"],
+                dry_run=True,
+            )
+            self.assertIsNone(result.output)
+            self.assertEqual(result.rules[0].old, "com.example")
+            self.assertEqual(len(result.rules[0].new), len("com.example"))
+            self.assertGreater(result.counts["com.example"][0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
