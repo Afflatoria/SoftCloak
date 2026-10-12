@@ -1,10 +1,16 @@
 [project]
 name = "softcloak"
-version = "1.01"
+version = "1.1.0"
 description = "Replace strings in an APK and re-sign it."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
+authors = [
+  { name = "Afflatoria" }
+]
+license = "MIT"
+[project.urls]
+Homepage = "https://github.com/Afflatoria/SoftCloak"
 
 [project.optional-dependencies]
 dev = ["ruff>=0.16"]
