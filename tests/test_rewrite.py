@@ -6,7 +6,13 @@ import zipfile
 import zlib
 from pathlib import Path
 
-from softcloak.rewrite import apply_rules, build_rules, fix_dex, obfuscated_token, rewrite_apk
+from softcloak.rewrite import (
+    apply_rules,
+    build_rules,
+    fix_dex,
+    obfuscated_token,
+    rewrite_apk,
+)
 
 
 class TokenTests(unittest.TestCase):
@@ -38,7 +44,9 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(counts["uncrackable1"], (1, 0))
 
     def test_dotted_substring_replaces_every_dex_slash_copy(self):
-        rules = build_rules(["sg.vantagepoint"], None, seed="seed", fit="error", pad_char=" ")
+        rules = build_rules(
+            ["sg.vantagepoint"], None, seed="seed", fit="error", pad_char=" "
+        )
         data = (
             b"Lsg/vantagepoint/a/a; Lsg/vantagepoint/uncrackable1/MainActivity; "
             b"sg.vantagepoint.MainActivity"
@@ -60,10 +68,18 @@ class RuleTests(unittest.TestCase):
 
     def test_length_mismatch_is_rejected(self):
         with self.assertRaises(ValueError):
-            build_rules(None, [("short", "much longer text")], seed="seed", fit="error", pad_char=" ")
+            build_rules(
+                None,
+                [("short", "much longer text")],
+                seed="seed",
+                fit="error",
+                pad_char=" ",
+            )
 
     def test_pad_fit_reaches_the_original_length(self):
-        rules = build_rules(None, [("abcdef", "xy")], seed="seed", fit="pad", pad_char=".")
+        rules = build_rules(
+            None, [("abcdef", "xy")], seed="seed", fit="pad", pad_char="."
+        )
         self.assertEqual(rules[0].new, "xy....")
 
 
@@ -71,7 +87,9 @@ class DexTests(unittest.TestCase):
     def test_checksum_matches_the_patched_bytes(self):
         raw = bytearray(b"dex\n035\x00" + b"\x00" * 120)
         raw.extend(b"uncrackable1")
-        rules = build_rules(["uncrackable1"], None, seed="seed", fit="error", pad_char=" ")
+        rules = build_rules(
+            ["uncrackable1"], None, seed="seed", fit="error", pad_char=" "
+        )
         updated, _counts = apply_rules(bytes(raw), rules)
         patched = fix_dex(updated)
         self.assertNotIn(b"uncrackable1", patched)
@@ -108,7 +126,11 @@ class ApkTests(unittest.TestCase):
             self.assertIn("res/icon.png", " ".join(result.warnings))
             with zipfile.ZipFile(dest) as archive:
                 names = set(archive.namelist())
-                blob = b"".join(archive.read(name) for name in archive.namelist() if not name.startswith("META-INF/"))
+                blob = b"".join(
+                    archive.read(name)
+                    for name in archive.namelist()
+                    if not name.startswith("META-INF/")
+                )
                 self.assertIn("META-INF/services/demo", names)
                 self.assertNotIn(b"uncrackable1", blob)
                 self.assertNotIn(b"vantagepoint", blob)
@@ -119,7 +141,9 @@ class ApkTests(unittest.TestCase):
                 checksum = struct.unpack_from("<I", dex_out, 8)[0]
                 self.assertEqual(checksum, zlib.adler32(dex_out[12:]) & 0xFFFFFFFF)
                 self.assertIn(b"keep-me", archive.read("META-INF/services/demo"))
-                self.assertNotIn(b"uncrackable1", archive.read("META-INF/services/demo"))
+                self.assertNotIn(
+                    b"uncrackable1", archive.read("META-INF/services/demo")
+                )
 
 
 if __name__ == "__main__":

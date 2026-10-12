@@ -19,7 +19,7 @@ def _parser() -> argparse.ArgumentParser:
         epilog=(
             "examples:\n"
             "  softcloak app.apk -o rebuilt.apk --contains com.example --contains CompanyName\n"
-            "  softcloak app.apk -o rebuilt.apk --exact \"Old full sentence\" \"New full sentence\"\n"
+            '  softcloak app.apk -o rebuilt.apk --exact "Old full sentence" "New full sentence"\n'
         ),
     )
     parser.add_argument("apk", help="input APK")
@@ -46,14 +46,23 @@ def _parser() -> argparse.ArgumentParser:
         default="error",
         help="what to do when an exact replacement has a different length (default: error)",
     )
-    parser.add_argument("--pad-char", default=" ", help="character used by --fit pad or --fit clip")
+    parser.add_argument(
+        "--pad-char", default=" ", help="character used by --fit pad or --fit clip"
+    )
     parser.add_argument(
         "--allow-missing",
         action="store_true",
         help="do not fail when a search string is absent",
     )
-    parser.add_argument("--dry-run", action="store_true", help="report replacements without writing an APK")
-    parser.add_argument("--keystore", help="existing keystore. A temporary key is generated when omitted")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report replacements without writing an APK",
+    )
+    parser.add_argument(
+        "--keystore",
+        help="existing keystore. A temporary key is generated when omitted",
+    )
     parser.add_argument("--storepass", help="keystore password")
     parser.add_argument("--keypass", help="key password. Defaults to --storepass")
     parser.add_argument("--alias", default="repack", help="key alias")

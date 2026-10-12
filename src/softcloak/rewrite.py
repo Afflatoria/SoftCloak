@@ -49,7 +49,9 @@ def _ascii(value: str, label: str) -> None:
     try:
         value.encode("ascii")
     except UnicodeEncodeError as exc:
-        raise ValueError(f"{label} must be ASCII so the APK layout stays intact: {value!r}") from exc
+        raise ValueError(
+            f"{label} must be ASCII so the APK layout stays intact: {value!r}"
+        ) from exc
 
 
 def _fit(old: str, new: str, mode: str, pad_char: str) -> str:
@@ -81,7 +83,7 @@ def obfuscated_token(text: str, blocked: list[str], seed: str) -> str:
     blocked_lower = [item.lower() for item in blocked if item]
     counter = 0
     while counter < 1000:
-        material = hashlib.sha256(f"{seed}:{counter}:{text}".encode("utf-8")).digest()
+        material = hashlib.sha256(f"{seed}:{counter}:{text}".encode()).digest()
         chars: list[str] = []
         while len(chars) < len(text):
             material = hashlib.sha256(material).digest()
@@ -103,11 +105,15 @@ def _replace_span(data: bytes, old: bytes, new: bytes) -> tuple[bytes, int]:
     return data, count
 
 
-def apply_rules(data: bytes, rules: list[Rule]) -> tuple[bytes, dict[str, tuple[int, int]]]:
+def apply_rules(
+    data: bytes, rules: list[Rule]
+) -> tuple[bytes, dict[str, tuple[int, int]]]:
     counts = {rule.old: [0, 0] for rule in rules}
     for rule in rules:
         for form in rule.forms:
-            data, utf8_count = _replace_span(data, form.encode("utf-8"), rule.new.encode("utf-8"))
+            data, utf8_count = _replace_span(
+                data, form.encode("utf-8"), rule.new.encode("utf-8")
+            )
             data, utf16_count = _replace_span(
                 data,
                 form.encode("utf-16le"),
@@ -156,7 +162,9 @@ def build_rules(
     contains = list(contains or [])
     exact = list(exact or [])
     if not contains and not exact:
-        raise ValueError("provide at least one --contains substring or --exact replacement")
+        raise ValueError(
+            "provide at least one --contains substring or --exact replacement"
+        )
     for text in contains:
         if not text:
             raise ValueError("--contains does not accept an empty string")
@@ -186,9 +194,18 @@ def build_rules(
                 )
         exact_rules.append(Rule("exact", old, fitted, (old,)))
 
-    blocked = contains + [rule.old for rule in exact_rules] + [rule.new for rule in exact_rules]
+    blocked = (
+        contains
+        + [rule.old for rule in exact_rules]
+        + [rule.new for rule in exact_rules]
+    )
     contain_rules = [
-        Rule("contains", text, obfuscated_token(text, blocked, seed), separator_forms(text))
+        Rule(
+            "contains",
+            text,
+            obfuscated_token(text, blocked, seed),
+            separator_forms(text),
+        )
         for text in sorted(contains, key=len, reverse=True)
     ]
     exact_rules.sort(key=lambda rule: len(rule.old), reverse=True)
@@ -227,7 +244,11 @@ def rewrite_apk(
         if is_signature_entry(info.filename) or _skipped(info.filename):
             hits = [rule.old for rule in rules if rule_present(data, rule)]
             if hits:
-                reason = "signature file" if is_signature_entry(info.filename) else "skipped binary file"
+                reason = (
+                    "signature file"
+                    if is_signature_entry(info.filename)
+                    else "skipped binary file"
+                )
                 warnings.append(
                     f"{info.filename} ({reason}) still contains: {', '.join(hits)}. "
                     "Those bytes were left unchanged."

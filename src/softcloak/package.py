@@ -18,7 +18,11 @@ def is_signature_entry(name: str) -> bool:
     if not name.upper().startswith("META-INF/"):
         return False
     base = name.rsplit("/", 1)[-1].upper()
-    return base == "MANIFEST.MF" or base.startswith("SIG-") or base.endswith(SIGNATURE_SUFFIXES)
+    return (
+        base == "MANIFEST.MF"
+        or base.startswith("SIG-")
+        or base.endswith(SIGNATURE_SUFFIXES)
+    )
 
 
 def find_java_tool(name: str) -> str:
@@ -44,7 +48,11 @@ def build_zip(entries: list[tuple[zipfile.ZipInfo, bytes]], dest: Path) -> None:
     central = bytearray()
     for info, data in entries:
         name_b = info.filename.encode("utf-8")
-        method = zipfile.ZIP_STORED if info.compress_type == zipfile.ZIP_STORED else zipfile.ZIP_DEFLATED
+        method = (
+            zipfile.ZIP_STORED
+            if info.compress_type == zipfile.ZIP_STORED
+            else zipfile.ZIP_DEFLATED
+        )
         crc = zlib.crc32(data) & 0xFFFFFFFF
         if method == zipfile.ZIP_STORED:
             payload = data
@@ -72,7 +80,10 @@ def build_zip(entries: list[tuple[zipfile.ZipInfo, bytes]], dest: Path) -> None:
             len(extra),
         )
         blob += name_b + extra + payload
-        if method == zipfile.ZIP_STORED and (local_off + 30 + len(name_b) + len(extra)) % 4 != 0:
+        if (
+            method == zipfile.ZIP_STORED
+            and (local_off + 30 + len(name_b) + len(extra)) % 4 != 0
+        ):
             raise RuntimeError(f"failed to align {info.filename}")
         central += struct.pack(
             "<IHHHHHHIIIHHHHHII",
@@ -113,7 +124,7 @@ def build_zip(entries: list[tuple[zipfile.ZipInfo, bytes]], dest: Path) -> None:
 
 
 def _run(command: list[str]) -> None:
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(f"{command[0]} failed: {detail}")
@@ -184,14 +195,14 @@ def sign_apk(
         )
         with zipfile.ZipFile(signed) as archive:
             entries = [
-                (info, archive.read(info.filename))
-                for info in archive.infolist()
+                (info, archive.read(info.filename)) for info in archive.infolist()
             ]
         build_zip(entries, dest)
         result = subprocess.run(
             [jarsigner, "-verify", str(dest)],
             capture_output=True,
             text=True,
+            check=False,
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
