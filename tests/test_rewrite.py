@@ -7,7 +7,12 @@ import zipfile
 import zlib
 from pathlib import Path
 
-from softcloak.package import PAGE_ALIGNMENT, build_zip, find_apksigner_jar
+from softcloak.package import (
+    PAGE_ALIGNMENT,
+    build_zip,
+    find_apksigner_jar,
+    manifest_min_sdk_unreadable,
+)
 from softcloak.rewrite import (
     apply_rules,
     build_rules,
@@ -266,6 +271,14 @@ class PackageLayoutTests(unittest.TestCase):
                 _payload_offset(blob, "lib/arm64-v8a/libdemo.so") % PAGE_ALIGNMENT,
                 0,
             )
+
+    def test_unreadable_manifest_is_detected_from_apksigner_output(self):
+        detail = (
+            "MinSdkVersionException: Failed to determine APK's minimum "
+            "supported platform version"
+        )
+        self.assertTrue(manifest_min_sdk_unreadable(detail))
+        self.assertFalse(manifest_min_sdk_unreadable("keystore password was incorrect"))
 
     def test_finds_the_highest_build_tools_jar(self):
         keys = ("APKSIGNER_JAR", "ANDROID_HOME", "ANDROID_SDK_ROOT")

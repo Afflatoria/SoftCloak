@@ -177,6 +177,88 @@ def _run(command: list[str]) -> None:
         raise RuntimeError(f"{command[0]} failed: {detail}")
 
 
+def manifest_min_sdk_unreadable(detail: str) -> bool:
+    """True when apksigner could not read minSdkVersion from the manifest."""
+    text = detail.lower()
+    return "minsdkversion" in text or "minimum supported" in text
+
+
+def _apksigner_sign(
+    java: str,
+    jar: str,
+    keystore: Path,
+    alias: str,
+    storepass: str,
+    keypass: str,
+    unsigned: Path,
+    dest: Path,
+    min_sdk: str | None,
+) -> None:
+    command = [
+        java,
+        "-jar",
+        jar,
+        "sign",
+        "--ks",
+        str(keystore),
+        "--ks-key-alias",
+        alias,
+        "--ks-pass",
+        f"pass:{storepass}",
+        "--key-pass",
+        f"pass:{keypass}",
+        "--v1-signing-enabled",
+        "true",
+        "--v2-signing-enabled",
+        "true",
+        "--v3-signing-enabled",
+        "true",
+        "--v4-signing-enabled",
+        "false",
+    ]
+    if min_sdk is not None:
+        command.extend(["--min-sdk-version", min_sdk])
+    command.extend(["--out", str(dest), str(unsigned)])
+    _run(command)
+    verify = [java, "-jar", jar, "verify"]
+    if min_sdk is not None:
+        verify.extend(["--min-sdk-version", min_sdk])
+    verify.append(str(dest))
+    _run(verify)
+
+
+def _sign_with_apksigner(
+    java: str,
+    jar: str,
+    keystore: Path,
+    alias: str,
+    storepass: str,
+    keypass: str,
+    unsigned: Path,
+    dest: Path,
+) -> list[str]:
+    warnings: list[str] = []
+    min_sdk = None
+    try:
+        _apksigner_sign(
+            java, jar, keystore, alias, storepass, keypass, unsigned, dest, None
+        )
+    except RuntimeError as exc:
+        if not manifest_min_sdk_unreadable(str(exc)):
+            raise
+        min_sdk = "1"
+        warnings.append(
+            "apksigner could not read minSdkVersion from AndroidManifest.xml. "
+            "Signed with --min-sdk-version 1."
+        )
+        _apksigner_sign(
+            java, jar, keystore, alias, storepass, keypass, unsigned, dest, min_sdk
+        )
+    if SIGNING_BLOCK_MAGIC not in dest.read_bytes():
+        raise RuntimeError("apksigner did not write a v2 signing block")
+    return warnings
+
+
 def sign_apk(
     unsigned: Path,
     dest: Path,
@@ -223,37 +305,17 @@ def sign_apk(
         apksigner_jar = find_apksigner_jar()
         if apksigner_jar:
             java = find_java_tool("java")
-            _run(
-                [
-                    java,
-                    "-jar",
-                    apksigner_jar,
-                    "sign",
-                    "--ks",
-                    str(keystore),
-                    "--ks-key-alias",
-                    alias,
-                    "--ks-pass",
-                    f"pass:{storepass}",
-                    "--key-pass",
-                    f"pass:{keypass}",
-                    "--v1-signing-enabled",
-                    "true",
-                    "--v2-signing-enabled",
-                    "true",
-                    "--v3-signing-enabled",
-                    "true",
-                    "--v4-signing-enabled",
-                    "false",
-                    "--out",
-                    str(dest),
-                    str(unsigned),
-                ]
+            warnings = _sign_with_apksigner(
+                java,
+                apksigner_jar,
+                keystore,
+                alias,
+                storepass,
+                keypass,
+                unsigned,
+                dest,
             )
-            _run([java, "-jar", apksigner_jar, "verify", str(dest)])
-            if SIGNING_BLOCK_MAGIC not in dest.read_bytes():
-                raise RuntimeError("apksigner did not write a v2 signing block")
-            return []
+            return warnings
         jarsigner = find_java_tool("jarsigner")
         signed = temp / "signed.apk"
         _run(

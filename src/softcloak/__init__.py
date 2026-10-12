@@ -3,4 +3,4 @@
 from softcloak.rewrite import RewriteResult, Rule, rewrite_apk
 
 __all__ = ["RewriteResult", "Rule", "rewrite_apk"]
-__version__ = "1.0.1"
+__version__ = "1.01"

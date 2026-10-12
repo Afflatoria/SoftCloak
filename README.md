@@ -11,7 +11,7 @@ Same-length replacements keep the DEX, manifest, and resource table aligned, so 
 
 A JDK is required. `keytool` and `jarsigner` must be on `PATH`.
 
-Android SDK build-tools are optional. When `ANDROID_HOME` or `ANDROID_SDK_ROOT` points at an SDK, SoftCloak signs with `apksigner` and writes v1, v2, and v3 signatures. Without that, it signs with `jarsigner` and prints a warning: the result is a JAR v1 signature, and an app with `targetSdk` 30 or higher will not install on Android 11 or later.
+Android SDK build-tools are optional. When `ANDROID_HOME` or `ANDROID_SDK_ROOT` points at an SDK, SoftCloak signs with `apksigner` and writes v1, v2, and v3 signatures. If `apksigner` cannot read `minSdkVersion` from the manifest, the APK is signed with `--min-sdk-version 1`. Without build-tools, SoftCloak signs with `jarsigner` and prints a warning: the result is a JAR v1 signature, and an app with `targetSdk` 30 or higher will not install on Android 11 or later.
 
 ```bash
 pip install softcloak
