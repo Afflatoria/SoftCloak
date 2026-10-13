@@ -11,6 +11,7 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from softcloak.decoys import decoy_zip_entry, dex_type_descriptors
 from softcloak.package import build_zip, is_signature_entry, sign_apk
 
 SKIP_SUFFIXES = {
@@ -44,6 +45,8 @@ class RewriteResult:
     counts: dict[str, tuple[int, int]]
     warnings: list[str] = field(default_factory=list)
     dry_run: bool = False
+    decoy_classes: tuple[str, ...] = ()
+    decoy_seed: str = ""
 
 
 def _ascii(value: str, label: str) -> None:
@@ -296,6 +299,8 @@ def rewrite_apk(
     storepass: str | None = None,
     keypass: str | None = None,
     alias: str = "repack",
+    decoys: int = 0,
+    decoy_seed: str | None = None,
 ) -> RewriteResult:
     """Replace text in an APK and re-sign it.
 
@@ -305,8 +310,12 @@ def rewrite_apk(
 
     The returned :class:`RewriteResult` lists each replacement on ``rules``
     and how many UTF-8 and UTF-16 matches changed in ``counts``. ``output``
-    is the signed APK, or ``None`` when ``dry_run`` is true.
+    is the signed APK, or ``None`` when ``dry_run`` is true. ``decoys`` adds
+    that many unused classes in a new dex. Their names and bytecode come from
+    ``decoy_seed``, or from a new random seed when it is omitted.
     """
+    if decoys < 0:
+        raise ValueError("decoy class count cannot be negative")
     source_path = Path(source)
     dest_path = Path(dest)
     if not source_path.is_file():
@@ -367,9 +376,37 @@ def rewrite_apk(
             updated = fix_dex(updated)
         rewritten.append((info, updated))
 
+    decoy_classes: tuple[str, ...] = ()
+    used_decoy_seed = ""
+    if decoys:
+        avoid: set[str] = set()
+        for info, data in rewritten:
+            if info.filename.endswith(".dex"):
+                avoid.update(dex_type_descriptors(data))
+        dated = next(
+            (info.date_time for info, _data in rewritten if info.filename.endswith(".dex")),
+            (2026, 10, 12, 0, 0, 0),
+        )
+        entry, payload, decoy_classes, used_decoy_seed = decoy_zip_entry(
+            [info.filename for info, _data in rewritten],
+            decoys,
+            seed=decoy_seed,
+            avoid=avoid,
+            date_time=dated,
+        )
+        rewritten.append((entry, payload))
+
     result_counts = {key: (value[0], value[1]) for key, value in totals.items()}
     if dry_run:
-        return RewriteResult(None, rules, result_counts, warnings, dry_run=True)
+        return RewriteResult(
+            None,
+            rules,
+            result_counts,
+            warnings,
+            dry_run=True,
+            decoy_classes=decoy_classes,
+            decoy_seed=used_decoy_seed,
+        )
 
     same_target = source_path.resolve() == dest_path.resolve()
     output = dest_path
@@ -392,4 +429,12 @@ def rewrite_apk(
     if same_target:
         os.replace(output, dest_path)
         output = dest_path
-    return RewriteResult(output, rules, result_counts, warnings, dry_run=False)
+    return RewriteResult(
+        output,
+        rules,
+        result_counts,
+        warnings,
+        dry_run=False,
+        decoy_classes=decoy_classes,
+        decoy_seed=used_decoy_seed,
+    )

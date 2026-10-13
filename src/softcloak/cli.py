@@ -66,6 +66,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--storepass", help="keystore password")
     parser.add_argument("--keypass", help="key password. Defaults to --storepass")
     parser.add_argument("--alias", default="repack", help="key alias")
+    parser.add_argument(
+        "--decoys",
+        type=int,
+        default=0,
+        help="add this many unused classes with random names and bytecode",
+    )
+    parser.add_argument(
+        "--decoy-seed",
+        help="seed for --decoys. Omit it to pick a new random seed every run",
+    )
     return parser
 
 
@@ -90,6 +100,10 @@ def _print_result(result) -> None:
     else:
         print(f"wrote {result.output}")
         print("signature verified")
+    if result.decoy_classes:
+        print(f"decoy seed {result.decoy_seed}")
+        for name in result.decoy_classes:
+            print(f"decoy {name}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
             storepass=args.storepass,
             keypass=args.keypass,
             alias=args.alias,
+            decoys=args.decoys,
+            decoy_seed=args.decoy_seed,
         )
     except (ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
