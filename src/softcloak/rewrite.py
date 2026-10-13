@@ -384,7 +384,11 @@ def rewrite_apk(
             if info.filename.endswith(".dex"):
                 avoid.update(dex_type_descriptors(data))
         dated = next(
-            (info.date_time for info, _data in rewritten if info.filename.endswith(".dex")),
+            (
+                info.date_time
+                for info, _data in rewritten
+                if info.filename.endswith(".dex")
+            ),
             (2026, 10, 12, 0, 0, 0),
         )
         entry, payload, decoy_classes, used_decoy_seed = decoy_zip_entry(

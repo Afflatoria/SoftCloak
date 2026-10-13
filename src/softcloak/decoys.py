@@ -9,8 +9,6 @@ import struct
 import zipfile
 from dataclasses import dataclass
 
-from softcloak.rewrite import fix_dex
-
 _PUBLIC = 0x1
 _STATIC = 0x8
 _CONSTRUCTOR = 0x10000
@@ -74,7 +72,11 @@ def next_dex_name(names: list[str]) -> str:
             continue
         if name == "classes.dex":
             used.add(1)
-        elif name.startswith("classes") and name.endswith(".dex") and name[7:-4].isdigit():
+        elif (
+            name.startswith("classes")
+            and name.endswith(".dex")
+            and name[7:-4].isdigit()
+        ):
             used.add(int(name[7:-4]))
     number = 2
     while number in used:
@@ -102,8 +104,10 @@ def build_decoy_dex(
     blocked = set(avoid or ())
     classes = [_plan_class(rng, blocked) for _item in range(class_count)]
     dex = _emit(classes)
+    from softcloak.rewrite import fix_dex
+
     names = tuple(_dotted(item.descriptor) for item in classes)
-    return dex, names, chosen
+    return fix_dex(dex), names, chosen
 
 
 class _Random:
@@ -147,7 +151,9 @@ def _plan_class(rng: _Random, blocked: set[str]) -> _ClassPlan:
                 return name
         raise RuntimeError("could not choose a decoy method name")
 
-    void_methods = [_void_method(descriptor, take_name(), rng) for _item in range(rng.randint(1, 3))]
+    void_methods = [
+        _void_method(descriptor, take_name(), rng) for _item in range(rng.randint(1, 3))
+    ]
     methods.extend(void_methods)
     if len(void_methods) > 1 and rng.chance(1, 2):
         void_methods[-1].calls = void_methods[0]
@@ -159,7 +165,9 @@ def _plan_class(rng: _Random, blocked: set[str]) -> _ClassPlan:
 
 def _fresh_descriptor(rng: _Random, blocked: set[str]) -> str:
     for _attempt in range(50):
-        segments = [_word(rng, 4, 10, upper=False) for _item in range(rng.randint(1, 3))]
+        segments = [
+            _word(rng, 4, 10, upper=False) for _item in range(rng.randint(1, 3))
+        ]
         simple = _word(rng, 6, 14, upper=True)
         descriptor = "L" + "/".join([*segments, simple]) + ";"
         if descriptor not in blocked and not descriptor.startswith(
@@ -197,7 +205,9 @@ def _constructor(descriptor: str) -> _Method:
 
 def _void_method(descriptor: str, name: str, rng: _Random) -> _Method:
     insns = [0x0000] * rng.randint(0, 2) + [0x000E]
-    return _Method(descriptor, name, _Proto("V", "V"), _PUBLIC | _STATIC, insns, 1, 0, 0)
+    return _Method(
+        descriptor, name, _Proto("V", "V"), _PUBLIC | _STATIC, insns, 1, 0, 0
+    )
 
 
 def _int_method(descriptor: str, name: str, rng: _Random) -> _Method:
@@ -216,7 +226,9 @@ def _int_method(descriptor: str, name: str, rng: _Random) -> _Method:
         ]
     else:
         insns = [*_const16(0, live), 0x000F]
-    return _Method(descriptor, name, _Proto("I", "I"), _PUBLIC | _STATIC, insns, 1, 0, 0)
+    return _Method(
+        descriptor, name, _Proto("I", "I"), _PUBLIC | _STATIC, insns, 1, 0, 0
+    )
 
 
 def _string_method(descriptor: str, name: str, rng: _Random) -> _Method:
@@ -242,10 +254,14 @@ def _literal(rng: _Random) -> str:
         return "".join(rng.choice(list(alphabet)) for _item in range(count))
     if kind == 1:
         alphabet = string.ascii_letters + string.digits + "+/"
-        return "".join(rng.choice(list(alphabet)) for _item in range(rng.randint(16, 40)))
+        return "".join(
+            rng.choice(list(alphabet)) for _item in range(rng.randint(16, 40))
+        )
     left = _word(rng, 3, 8, upper=False)
     right = _word(rng, 3, 8, upper=False)
-    tail = "".join(rng.choice(list(string.digits)) for _item in range(rng.randint(1, 3)))
+    tail = "".join(
+        rng.choice(list(string.digits)) for _item in range(rng.randint(1, 3))
+    )
     return f"{left}.{right}/{tail}"
 
 
@@ -258,7 +274,14 @@ def _dotted(descriptor: str) -> str:
 
 
 def _emit(classes: list[_ClassPlan]) -> bytes:
-    strings: set[str] = {"<init>", "V", "I", "L", "Ljava/lang/Object;", "Ljava/lang/String;"}
+    strings: set[str] = {
+        "<init>",
+        "V",
+        "I",
+        "L",
+        "Ljava/lang/Object;",
+        "Ljava/lang/String;",
+    }
     for item in classes:
         strings.add(item.descriptor)
         for method in item.methods:
@@ -287,7 +310,8 @@ def _emit(classes: list[_ClassPlan]) -> bytes:
                 protos.append(method.proto)
     protos.sort(key=lambda item: (type_index[item.return_type], item.params))
     proto_index = {
-        (item.shorty, item.return_type, item.params): index for index, item in enumerate(protos)
+        (item.shorty, item.return_type, item.params): index
+        for index, item in enumerate(protos)
     }
 
     methods = [method for item in classes for method in item.methods]
@@ -320,17 +344,15 @@ def _emit(classes: list[_ClassPlan]) -> bytes:
         else:
             method.insns = [_resolve_word(word, string_index) for word in method.insns]
 
-    return fix_dex(
-        _layout(
-            ordered_strings,
-            descriptors,
-            protos,
-            all_methods,
-            classes,
-            string_index,
-            type_index,
-            proto_index,
-        )
+    return _layout(
+        ordered_strings,
+        descriptors,
+        protos,
+        all_methods,
+        classes,
+        string_index,
+        type_index,
+        proto_index,
     )
 
 
@@ -409,10 +431,15 @@ def _layout(
         b"".join(struct.pack("<I", offset) for offset in string_offsets),
         b"".join(struct.pack("<I", string_index[text]) for text in descriptors),
         b"".join(_proto_item(item, string_index, type_index) for item in protos),
-        b"".join(_method_item(item, string_index, type_index, proto_index) for item in methods),
+        b"".join(
+            _method_item(item, string_index, type_index, proto_index)
+            for item in methods
+        ),
         b"".join(
             _class_def(item, type_index, class_data_offsets[index])
-            for index, item in enumerate(sorted(classes, key=lambda entry: type_index[entry.descriptor]))
+            for index, item in enumerate(
+                sorted(classes, key=lambda entry: type_index[entry.descriptor])
+            )
         ),
         bytes(string_blob),
         data_pad,
@@ -446,7 +473,9 @@ def _layout(
     return bytes(header)
 
 
-def _proto_item(proto: _Proto, string_index: dict[str, int], type_index: dict[str, int]) -> bytes:
+def _proto_item(
+    proto: _Proto, string_index: dict[str, int], type_index: dict[str, int]
+) -> bytes:
     return struct.pack(
         "<III",
         string_index[proto.shorty],
@@ -464,7 +493,9 @@ def _method_item(
     return struct.pack(
         "<HHI",
         type_index[method.class_desc],
-        proto_index[(method.proto.shorty, method.proto.return_type, method.proto.params)],
+        proto_index[
+            (method.proto.shorty, method.proto.return_type, method.proto.params)
+        ],
         string_index[method.name],
     )
 
@@ -497,15 +528,18 @@ def _class_data(item: _ClassPlan, code_offsets: dict[int, int]) -> bytes:
 
 def _code_item(method: _Method) -> bytes:
     insns = b"".join(struct.pack("<H", word & 0xFFFF) for word in method.insns)
-    return struct.pack(
-        "<HHHHII",
-        method.registers,
-        method.ins,
-        method.outs,
-        0,
-        0,
-        len(method.insns),
-    ) + insns
+    return (
+        struct.pack(
+            "<HHHHII",
+            method.registers,
+            method.ins,
+            method.outs,
+            0,
+            0,
+            len(method.insns),
+        )
+        + insns
+    )
 
 
 def _map_list(items: list[tuple[int, int, int]]) -> bytes:
@@ -553,7 +587,9 @@ def decoy_zip_entry(
     date_time: tuple[int, int, int, int, int, int],
 ) -> tuple[zipfile.ZipInfo, bytes, tuple[str, ...], str]:
     """Build the zip entry that holds the decoy dex."""
-    payload, class_names, used_seed = build_decoy_dex(class_count, seed=seed, avoid=avoid)
+    payload, class_names, used_seed = build_decoy_dex(
+        class_count, seed=seed, avoid=avoid
+    )
     info = zipfile.ZipInfo(next_dex_name(names), date_time=date_time)
     info.compress_type = zipfile.ZIP_DEFLATED
     return info, payload, class_names, used_seed
